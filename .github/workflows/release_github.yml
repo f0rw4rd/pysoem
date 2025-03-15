@@ -1,0 +1,73 @@
+name: Build PySOEM sdist and wheels and attach to GitHub Release
+
+# This is triggered upon creating a release on GitHub
+on:
+  release:
+    types: [published]
+
+jobs:
+  build_wheels:
+    name: Build wheels on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    # Only run if the release was created from the devdirty branch
+    if: github.event.release.target_commitish == 'devdirty'
+    strategy:
+      matrix:
+        os: [ubuntu-22.04, windows-2022, macos-13]
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v2.20.0
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cibw-wheels-${{ matrix.os }}-${{ strategy.job-index }}
+          path: ./wheelhouse/*.whl
+
+  build_sdist:
+    name: Build source distribution
+    runs-on: ubuntu-latest
+    # Only run if the release was created from the devdirty branch
+    if: github.event.release.target_commitish == 'devdirty'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Build sdist
+        run: pipx run build --sdist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cibw-sdist
+          path: ./dist/*.tar.gz
+
+  attach_to_release:
+    needs: [build_wheels, build_sdist]
+    runs-on: ubuntu-latest
+    # Only run if the release was created from the devdirty branch
+    if: github.event.release.target_commitish == 'devdirty'
+    permissions:
+      contents: write  # Needed for updating releases
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          # unpacks all CIBW artifacts into dist/
+          pattern: cibw-*
+          path: dist
+          merge-multiple: true
+
+      - name: Attach artifacts to GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            dist/*.whl
+            dist/*.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+
