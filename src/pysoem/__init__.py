@@ -1,4 +1,4 @@
-__version__ = '1.1.13-dev1'
+__version__ = '1.1.13'
 
 
 # Classes:
