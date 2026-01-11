@@ -75,6 +75,16 @@ Using `this pysoem chat room on gitter <https://gitter.im/pysoem/pysoem>`_ is on
 Changes
 -------
 
+v1.1.13
+^^^^^^^
+* Fixes single access to object directory property ``obj_access``.
+* Fixes ``sdo_read()`` with ``release_gil`` parameter being ``True``.
+* Adds the ``release_gil`` parameter also to ``send_overlap_processdata()``.
+* Adds ``get_watchdog()`` to retrieve the watchdog timeout.
+* Adds the emission of a warning in ``set_watchdog()`` if the actual watchdog timeout differs from the requested timeout.
+* Binary wheels are now also available for "manylinux" with ARM64/aarch64 on PyPI.
+* Binary wheels are now also available for Python 3.14.
+
 v1.1.12
 ^^^^^^^
 * Updates the underlying SOEM to fix segmented io issues
