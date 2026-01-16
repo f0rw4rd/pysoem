@@ -378,10 +378,10 @@ cdef class CdefMaster:
             int: Working counter of slave discover datagram = number of slaves found, -1 when no slave is connected
         """
         release_gil = self.check_release_gil(release_gil)
+        cdef int ret_val
         with self._operation_context():
             self.slaves = []
             
-            cdef int ret_val
             if release_gil:
                 ret_val = self.__config_init_nogil(usetable)
             else:
@@ -398,8 +398,8 @@ cdef class CdefMaster:
         Returns:
             int: IO map size (sum of all PDO in an out data)
         """
+        cdef _CallbackData cd
         with self._operation_context():
-            cdef _CallbackData cd
             # ecx_config_map_group returns the actual IO map size (not an error value), expect the value to be less than EC_IOMAPSIZE
             ret_val = cpysoem.ecx_config_map_group(&self._ecx_contextt, &self.io_map, 0)
             # check for exceptions raised in the config functions
@@ -420,8 +420,8 @@ cdef class CdefMaster:
         Returns:
             int: IO map size (sum of all PDO in an out data)
         """
+        cdef _CallbackData cd
         with self._operation_context():
-            cdef _CallbackData cd
             # ecx_config_map_group returns the actual IO map size (not an error value), expect the value to be less than EC_IOMAPSIZE
             ret_val = cpysoem.ecx_config_overlap_map_group(&self._ecx_contextt, &self.io_map, 0)
             # check for exceptions raised in the config functions
@@ -913,14 +913,17 @@ cdef class CdefSlave:
             PacketError: on packet level error
             WkcError: if working counter is not higher than 0, the exception includes the working counter
         """
+        cdef unsigned char* pbuf
+        cdef uint8_t std_buffer[STATIC_SDO_READ_BUFFER_SIZE]
+        cdef int size_inout
+        cdef int result
+        cdef cpysoem.ec_errort err
+        
         release_gil = self._master.check_release_gil(release_gil=release_gil)
         if self._ecx_contextt == NULL:
             raise UnboundLocalError()
 
         with self._master._operation_context():
-            cdef unsigned char* pbuf
-            cdef uint8_t std_buffer[STATIC_SDO_READ_BUFFER_SIZE]
-            cdef int size_inout
             if size == 0:
                 pbuf = std_buffer
                 size_inout = STATIC_SDO_READ_BUFFER_SIZE
@@ -931,14 +934,12 @@ cdef class CdefSlave:
             if pbuf == NULL:
                 raise MemoryError()
             
-            cdef int result
             if release_gil:
                 result = self.__sdo_read_nogil(index, subindex, ca, &size_inout, pbuf)
             else:
                 result = cpysoem.ecx_SDOread(self._ecx_contextt, self._pos, index, subindex, ca,
                                                   &size_inout, pbuf, self._the_masters_settings.sdo_read_timeout[0])
 
-            cdef cpysoem.ec_errort err
             while cpysoem.ecx_poperror(self._ecx_contextt, &err):
                 assert err.Slave == self._pos
 
@@ -996,18 +997,19 @@ cdef class CdefSlave:
             PacketError: on packet level error
             WkcError: if working counter is not higher than 0, the exception includes the working counter
         """
+        cdef int size = len(data)
+        cdef int result
+        cdef cpysoem.ec_errort err
+        
         release_gil = self._master.check_release_gil(release_gil=release_gil)
 
         with self._master._operation_context():
-            cdef int size = len(data)
-            cdef int result
             if release_gil:
                 result = self.__sdo_write_nogil(index, subindex, ca, size, data)
             else:
                 result = cpysoem.ecx_SDOwrite(self._ecx_contextt, self._pos, index, subindex, ca,
                                                    size, <unsigned char*>data, self._the_masters_settings.sdo_write_timeout[0])
             
-            cdef cpysoem.ec_errort err
             while(cpysoem.ecx_poperror(self._ecx_contextt, &err)):
                 if (err.Etype == cpysoem.EC_ERR_TYPE_EMERGENCY) and (len(self._emcy_callbacks) > 0):
                     self._on_emergency(&err)
@@ -1026,12 +1028,14 @@ cdef class CdefSlave:
         :rtype: int
         :raises Emergency: if an emergency message was received
         """
+        cdef cpysoem.ec_mbxbuft buf
+        cdef int wkt
+        cdef cpysoem.ec_errort err
+        
         with self._master._operation_context():
-            cdef cpysoem.ec_mbxbuft buf
             cpysoem.ec_clearmbx(&buf)
-            cdef int wkt = cpysoem.ecx_mbxreceive(self._ecx_contextt, self._pos, &buf, 0)
+            wkt = cpysoem.ecx_mbxreceive(self._ecx_contextt, self._pos, &buf, 0)
 
-            cdef cpysoem.ec_errort err
             if cpysoem.ecx_poperror(self._ecx_contextt, &err):
                 if (err.Etype == cpysoem.EC_ERR_TYPE_EMERGENCY) and (len(self._emcy_callbacks) > 0):
                     self._on_emergency(&err)
@@ -1144,22 +1148,22 @@ cdef class CdefSlave:
             timeout (int): Timeout value in us
             release_gil (:obj:`bool`, optional): True to FoE write releasing the GIL. Defaults to False.
         """
+        cdef int result
+        cdef int size = len(data)
+        cdef cpysoem.ec_errort err
+        
         release_gil = self._master.check_release_gil(release_gil=release_gil)
         # error handling
         if self._ecx_contextt == NULL:
             raise UnboundLocalError()
 
         with self._master._operation_context():
-            cdef int result
-            cdef int size = len(data)
-            
             if release_gil:
                 result = self.__foe_write_nogil(filename, password, size, data, timeout)
             else:
                 result = cpysoem.ecx_FOEwrite(self._ecx_contextt, self._pos, filename.encode('utf8'), password, size, <unsigned char*>data, timeout)
             
             # error handling
-            cdef cpysoem.ec_errort err
             if cpysoem.ecx_poperror(self._ecx_contextt, &err):
                 assert err.Slave == self._pos
                 self._raise_exception(&err)
@@ -1197,25 +1201,26 @@ cdef class CdefSlave:
             timeout (int): Timeout value in us
             release_gil (:obj:`bool`, optional): True to FoE write releasing the GIL. Defaults to False.
         """
+        cdef unsigned char* pbuf
+        cdef int size_inout
+        cdef int result
+        cdef cpysoem.ec_errort err
+        
         release_gil = self._master.check_release_gil(release_gil=release_gil)
         if self._ecx_contextt == NULL:
             raise UnboundLocalError()
 
         with self._master._operation_context():
             # prepare call of c function
-            cdef unsigned char* pbuf
-            cdef int size_inout
             pbuf = <unsigned char*>PyMem_Malloc((size)*sizeof(unsigned char))
             size_inout = size
 
-            cdef int result
             if release_gil:
                 result = self.__foe_read_nogil(filename, password, size_inout, pbuf, timeout)
             else:
                 result = cpysoem.ecx_FOEread(self._ecx_contextt, self._pos, filename.encode('utf8'), password, &size_inout, pbuf, timeout)
 
             # error handling
-            cdef cpysoem.ec_errort err
             if cpysoem.ecx_poperror(self._ecx_contextt, &err):
                 PyMem_Free(pbuf)
                 assert err.Slave == self._pos
