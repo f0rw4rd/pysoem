@@ -320,6 +320,7 @@ cdef class CdefMaster:
             raise ConnectionError('could not open interface {}'.format(ifname))
 
         self.context_initialized = True
+        self._closing = False
 
     @contextlib.contextmanager
     def _operation_context(self):
@@ -484,6 +485,8 @@ cdef class CdefMaster:
         # ecx_close returns nothing
         self.context_initialized = False
         cpysoem.ecx_close(&self._ecx_contextt)
+        self._closing = False
+        
 
     def read_state(self):
         """Read all slaves states.
