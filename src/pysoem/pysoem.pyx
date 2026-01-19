@@ -865,12 +865,11 @@ cdef class CdefSlave:
             sync1_cycle_time (int): Optional cycltime for SYNC1 in ns. This time is a delta time in relation to SYNC0.
                                     If CylcTime1 = 0 then SYNC1 fires at the same time as SYNC0.
         """
-        self._master.check_context_is_initialized()
-    
-        if sync1_cycle_time is None:
-            cpysoem.ecx_dcsync0(self._ecx_contextt, self._pos, act, sync0_cycle_time, sync0_shift_time)
-        else:
-            cpysoem.ecx_dcsync01(self._ecx_contextt, self._pos, act, sync0_cycle_time, sync1_cycle_time, sync0_shift_time) 
+        with self._master._operation_context():
+            if sync1_cycle_time is None:
+                cpysoem.ecx_dcsync0(self._ecx_contextt, self._pos, act, sync0_cycle_time, sync0_shift_time)
+            else:
+                cpysoem.ecx_dcsync01(self._ecx_contextt, self._pos, act, sync0_cycle_time, sync1_cycle_time, sync0_shift_time) 
 
     cdef int __sdo_read_nogil(self, uint16_t index, uint8_t subindex, int8_t ca, int* size_inout, unsigned char* pbuf):
         """Read a CoE object without GIL.
@@ -1049,13 +1048,13 @@ cdef class CdefSlave:
 
         Note: The function does not check if the actual state is changed.
         """
-        self._master.check_context_is_initialized()
-        return cpysoem.ecx_writestate(self._ecx_contextt, self._pos)
+        with self._master._operation_context():
+            return cpysoem.ecx_writestate(self._ecx_contextt, self._pos)
         
     def state_check(self, int expected_state, timeout=2000):
         """Wait for the slave to reach the state that was requested."""
-        self._master.check_context_is_initialized()
-        return cpysoem.ecx_statecheck(self._ecx_contextt, self._pos, expected_state, timeout)
+        with self._master._operation_context():
+            return cpysoem.ecx_statecheck(self._ecx_contextt, self._pos, expected_state, timeout)
         
     def reconfig(self, timeout=500):
         """Reconfigure slave.
@@ -1064,8 +1063,8 @@ cdef class CdefSlave:
         :return: Slave state
         :rtype: int
         """
-        self._master.check_context_is_initialized()
-        return cpysoem.ecx_reconfig_slave(self._ecx_contextt, self._pos, timeout)
+        with self._master._operation_context():
+            return cpysoem.ecx_reconfig_slave(self._ecx_contextt, self._pos, timeout)
         
     def recover(self, timeout=500):
         """Recover slave.
@@ -1074,8 +1073,8 @@ cdef class CdefSlave:
         :return: >0 if successful
         :rtype: int
         """
-        self._master.check_context_is_initialized()
-        return cpysoem.ecx_recover_slave(self._ecx_contextt, self._pos, timeout)
+        with self._master._operation_context():
+            return cpysoem.ecx_recover_slave(self._ecx_contextt, self._pos, timeout)
         
     def eeprom_read(self, int word_address, timeout=20000):
         """Read 4 byte from EEPROM
@@ -1089,8 +1088,9 @@ cdef class CdefSlave:
         Returns:
             bytes: EEPROM data
         """
-        self._master.check_context_is_initialized()
-        cdef uint32_t tmp = cpysoem.ecx_readeeprom(self._ecx_contextt, self._pos, word_address, timeout)
+        cdef uint32_t tmp
+        with self._master._operation_context():
+            tmp = cpysoem.ecx_readeeprom(self._ecx_contextt, self._pos, word_address, timeout)
         return PyBytes_FromStringAndSize(<char*>&tmp, 4)
         
     def eeprom_write(self, int word_address, bytes data, timeout=20000):
@@ -1107,12 +1107,13 @@ cdef class CdefSlave:
             EepromError: if write fails
             AttributeError: if data size is not 2
         """
-        self._master.check_context_is_initialized()
+        cdef uint16_t tmp
+        cdef int result
         if not len(data) == 2:
             raise AttributeError()
-        cdef uint16_t tmp
         memcpy(<char*>&tmp, <unsigned char*>data, 2)
-        cdef int result = cpysoem.ecx_writeeeprom(self._ecx_contextt, self._pos, word_address, tmp, timeout)
+        with self._master._operation_context():
+            result = cpysoem.ecx_writeeeprom(self._ecx_contextt, self._pos, word_address, tmp, timeout)
         if not result > 0:
             raise EepromError('EEPROM write error')
 
@@ -1282,30 +1283,29 @@ cdef class CdefSlave:
 
         .. versionadded:: 1.0.6
         """
-        self._master.check_context_is_initialized()
+        with self._master._operation_context():
+            fprd_fpwr_timeout_us = 4000
+            wd_type_to_reg_map = {
+                'pdi': ECT_REG_WD_TIME_PDI,
+                'processdata': ECT_REG_WD_TIME_PROCESSDATA,
+            }
+            if wd_type not in wd_type_to_reg_map.keys():
+                raise AttributeError()
+            wd_time_ms_limit = self.get_max_watchdog_time()
+            if wd_time_ms > wd_time_ms_limit:
+                raise AttributeError('wd_time_ms is limited to {} ms'.format(wd_time_ms_limit))
 
-        fprd_fpwr_timeout_us = 4000
-        wd_type_to_reg_map = {
-            'pdi': ECT_REG_WD_TIME_PDI,
-            'processdata': ECT_REG_WD_TIME_PROCESSDATA,
-        }
-        if wd_type not in wd_type_to_reg_map.keys():
-            raise AttributeError()
-        wd_time_ms_limit = self.get_max_watchdog_time()
-        if wd_time_ms > wd_time_ms_limit:
-            raise AttributeError('wd_time_ms is limited to {} ms'.format(wd_time_ms_limit))
+            wd_div_ns = self._get_watchdog_divider_ns()
+            wd_time_reg = int((wd_time_ms*1000000.0) / wd_div_ns)
 
-        wd_div_ns = self._get_watchdog_divider_ns()
-        wd_time_reg = int((wd_time_ms*1000000.0) / wd_div_ns)
+            self._fpwr(wd_type_to_reg_map[wd_type],
+                       wd_time_reg.to_bytes(2, byteorder='little', signed=False),
+                       fprd_fpwr_timeout_us)
+            
+            actual_wd_time_ms = wd_time_reg * wd_div_ns / 1000000.0
 
-        self._fpwr(wd_type_to_reg_map[wd_type],
-                   wd_time_reg.to_bytes(2, byteorder='little', signed=False),
-                   fprd_fpwr_timeout_us)
-        
-        actual_wd_time_ms = wd_time_reg * wd_div_ns / 1000000.0
-
-        if actual_wd_time_ms != wd_time_ms:
-            warnings.warn(f'The actual set watchdog time ({actual_wd_time_ms} ms) differs from the requested watchdog time ({wd_time_ms} ms) due to resolution limits of the hardware!', UserWarning)
+            if actual_wd_time_ms != wd_time_ms:
+                warnings.warn(f'The actual set watchdog time ({actual_wd_time_ms} ms) differs from the requested watchdog time ({wd_time_ms} ms) due to resolution limits of the hardware!', UserWarning)
 
     def get_watchdog(self, wd_type):
         """Get the watchdog time of the PDI or Process Data watchdog.
@@ -1355,8 +1355,8 @@ cdef class CdefSlave:
             Callable which must take one argument of an
             :class:`~Emergency` instance.
         """
-        self._master.check_context_is_initialized()
-        self._emcy_callbacks.append(callback)
+        with self._master._operation_context():
+            self._emcy_callbacks.append(callback)
 
     cdef _on_emergency(self, cpysoem.ec_errort* emcy):
         """Notify all emergency callbacks that an emergency message
