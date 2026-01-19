@@ -250,7 +250,7 @@ cdef class CdefMaster:
     cdef public cpysoem.boolean always_release_gil
     cdef readonly cpysoem.boolean context_initialized
     cdef int _active_ops_count
-    cdef object _active_ops_zero_event
+    cdef object _no_active_ops_event
     cdef cpysoem.boolean _closing
 
     state = property(_get_state, _set_state)
@@ -289,8 +289,8 @@ cdef class CdefMaster:
         self._settings.sdo_write_timeout = &self.sdo_write_timeout
         self.context_initialized = False
         self._active_ops_count = 0
-        self._active_ops_zero_event = threading.Event()
-        self._active_ops_zero_event.set()
+        self._no_active_ops_event = threading.Event()
+        self._no_active_ops_event.set()
         self._closing = False
         
     def open(self, ifname, ifname_red=None):
@@ -321,6 +321,8 @@ cdef class CdefMaster:
 
         self.context_initialized = True
         self._closing = False
+        self._active_ops_count = 0
+        self._no_active_ops_event.set()
 
     @contextlib.contextmanager
     def _operation_context(self):
@@ -334,14 +336,18 @@ cdef class CdefMaster:
             raise NetworkInterfaceNotOpenError("SOEM Network interface is not initialized or has been closed. Call Master.open() first")
         if self._closing:
             raise RuntimeError("SOEM context is closing and cannot accept new operations")
+        
+        # Only clear the event when transitioning from 0 to 1
+        if self._active_ops_count == 0:
+            self._no_active_ops_event.clear()
         self._active_ops_count += 1
-        self._active_ops_zero_event.clear()
+        
         try:
             yield
         finally:
             self._active_ops_count -= 1
             if self._active_ops_count == 0:
-                self._active_ops_zero_event.set()
+                self._no_active_ops_event.set()
 
     cdef int __config_init_nogil(self, uint8_t usetable):
         """Enumerate and init all slaves without GIL.
@@ -478,7 +484,7 @@ cdef class CdefMaster:
         
         # Wait for all active operations to complete
         timeout = 5.0
-        if not self._active_ops_zero_event.wait(timeout=timeout):
+        if not self._no_active_ops_event.wait(timeout=timeout):
             logger.warning("Timeout waiting for active SOEM operations to complete during close(). "
                           "There may be threads still accessing the context. Proceeding with close anyway.")
         
