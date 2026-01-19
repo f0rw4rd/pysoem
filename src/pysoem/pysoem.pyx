@@ -33,6 +33,7 @@ from cpython.ref cimport Py_INCREF, Py_DECREF
 
 logger = logging.getLogger(__name__)
 
+
 NONE_STATE = cpysoem.EC_STATE_NONE
 INIT_STATE = cpysoem.EC_STATE_INIT
 PREOP_STATE = cpysoem.EC_STATE_PRE_OP
@@ -120,6 +121,44 @@ cdef class CdefSettings:
         self.always_release_gil = False
 
 settings = CdefSettings()
+
+
+cdef class OperationCounter:
+    """Thread-safe counter that signals when count reaches zero."""
+    
+    cdef int _count
+    cdef object _lock
+    cdef object _zero_event
+    
+    def __init__(self):
+        self._count = 0
+        self._lock = threading.Lock()
+        self._zero_event = threading.Event()
+        self._zero_event.set()  # Initially zero
+    
+    def increment(self):
+        """Increment counter, clear event if transitioning from 0."""
+        with self._lock:
+            if self._count == 0:
+                self._zero_event.clear()
+            self._count += 1
+    
+    def decrement(self):
+        """Decrement counter, set event if reaching 0."""
+        with self._lock:
+            self._count -= 1
+            if self._count == 0:
+                self._zero_event.set()
+    
+    def wait_for_zero(self, timeout=None):
+        """Wait until count reaches zero. Returns True if zero, False on timeout."""
+        return self._zero_event.wait(timeout)
+    
+    def reset(self):
+        """Reset counter to zero and set event."""
+        with self._lock:
+            self._count = 0
+            self._zero_event.set()
 
 cpdef enum ec_datatype:
     ECT_BOOLEAN         = 0x0001,
@@ -249,8 +288,7 @@ cdef class CdefMaster:
     cdef public int sdo_write_timeout
     cdef public cpysoem.boolean always_release_gil
     cdef readonly cpysoem.boolean context_initialized
-    cdef int _active_ops_count
-    cdef object _no_active_ops_event
+    cdef object _active_ops_counter
     cdef cpysoem.boolean _closing
 
     state = property(_get_state, _set_state)
@@ -288,9 +326,7 @@ cdef class CdefMaster:
         self._settings.sdo_read_timeout = &self.sdo_read_timeout
         self._settings.sdo_write_timeout = &self.sdo_write_timeout
         self.context_initialized = False
-        self._active_ops_count = 0
-        self._no_active_ops_event = threading.Event()
-        self._no_active_ops_event.set()
+        self._active_ops_counter = OperationCounter()
         self._closing = False
         
     def open(self, ifname, ifname_red=None):
@@ -321,8 +357,7 @@ cdef class CdefMaster:
 
         self.context_initialized = True
         self._closing = False
-        self._active_ops_count = 0
-        self._no_active_ops_event.set()
+        self._active_ops_counter.reset()
 
     @contextlib.contextmanager
     def _operation_context(self):
@@ -337,17 +372,11 @@ cdef class CdefMaster:
         if self._closing:
             raise RuntimeError("SOEM context is closing and cannot accept new operations")
         
-        # Only clear the event when transitioning from 0 to 1
-        if self._active_ops_count == 0:
-            self._no_active_ops_event.clear()
-        self._active_ops_count += 1
-        
+        self._active_ops_counter.increment()
         try:
             yield
         finally:
-            self._active_ops_count -= 1
-            if self._active_ops_count == 0:
-                self._no_active_ops_event.set()
+            self._active_ops_counter.decrement()
 
     cdef int __config_init_nogil(self, uint8_t usetable):
         """Enumerate and init all slaves without GIL.
@@ -484,7 +513,7 @@ cdef class CdefMaster:
         
         # Wait for all active operations to complete
         timeout = 5.0
-        if not self._no_active_ops_event.wait(timeout=timeout):
+        if not self._active_ops_counter.wait_for_zero(timeout=timeout):
             logger.warning("Timeout waiting for active SOEM operations to complete during close(). "
                           "There may be threads still accessing the context. Proceeding with close anyway.")
         
