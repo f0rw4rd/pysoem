@@ -1206,7 +1206,7 @@ cdef class CdefSlave:
         cdef int result
         cdef int size = len(data)
         cdef cpysoem.ec_errort err
-        
+
         release_gil = self._master.check_release_gil(release_gil=release_gil)
         # error handling
         if self._ecx_contextt == NULL:
@@ -1217,24 +1217,13 @@ cdef class CdefSlave:
                 result = self.__foe_write_nogil(filename, password, size, data, timeout)
             else:
                 result = cpysoem.ecx_FOEwrite(self._ecx_contextt, self._pos, filename.encode('utf8'), password, size, <unsigned char*>data, timeout)
-            
+
             # error handling
             if cpysoem.ecx_poperror(self._ecx_contextt, &err):
                 assert err.Slave == self._pos
                 self._raise_exception(&err)
 
-            # Check for negative return values from ecx_FOEwrite
-            if result < 0:
-                if result == -cpysoem.EC_ERR_TYPE_FOE_ERROR:
-                    raise FoeError(self._pos, result, "General FoE error")
-                elif result == -cpysoem.EC_ERR_TYPE_FOE_PACKETNUMBER:
-                    raise FoeError(self._pos, result, "Packet number error")
-                elif result == -cpysoem.EC_ERR_TYPE_FOE_FILE_NOTFOUND:
-                    raise FoeError(self._pos, result, "File not found or access denied")
-                elif result == -cpysoem.EC_ERR_TYPE_PACKET_ERROR:
-                    raise FoeError(self._pos, result, "Unexpected packet received")
-                else:
-                    raise FoeError(self._pos, result, "Unknown FoE error")
+            self._check_foe_result(result)
 
             return result
 
@@ -1256,7 +1245,7 @@ cdef class CdefSlave:
         with nogil:
             result = cpysoem.ecx_FOEread(self._ecx_contextt, self._pos, c_filename, password, &size_inout, pbuf, timeout)
         Py_DECREF(self)
-        
+
         return result
 
     def foe_read(self, filename, password, size, timeout = 200000, *, release_gil=None):
@@ -1299,23 +1288,7 @@ cdef class CdefSlave:
                     assert err.Slave == self._pos
                     self._raise_exception(&err)
 
-                # Check for negative return values from ecx_FOEread
-                if result < 0:
-                    if result == -cpysoem.EC_ERR_TYPE_FOE_ERROR:
-                        raise FoeError(self._pos, result, "General FoE error")
-                    elif result == -cpysoem.EC_ERR_TYPE_FOE_BUF2SMALL:
-                        raise FoeError(self._pos, result, "Buffer too small for file content")
-                    elif result == -cpysoem.EC_ERR_TYPE_FOE_PACKETNUMBER:
-                        raise FoeError(self._pos, result, "Packet number error")
-                    elif result == -cpysoem.EC_ERR_TYPE_FOE_FILE_NOTFOUND:
-                        raise FoeError(self._pos, result, "File not found or access denied")
-                    elif result == -cpysoem.EC_ERR_TYPE_PACKET_ERROR:
-                        raise FoeError(self._pos, result, "Unexpected packet received")
-                    else:
-                        raise FoeError(self._pos, result, "Unknown FoE error")
-
-                if result <= 0:
-                    raise FoeError(self._pos, 0, "FoE read failed with invalid work counter")
+                self._check_foe_result(result)
 
                 return PyBytes_FromStringAndSize(<char*>pbuf, size_inout)
             finally:
@@ -1492,6 +1465,23 @@ cdef class CdefSlave:
         cdef int wkc = cpysoem.ecx_FPWR(self._ecx_contextt.port, self._ec_slave.configadr, address, <int>len(data), <unsigned char*>data, timeout_us)
         if wkc != 1:
             raise WkcError()
+
+    cdef _check_foe_result(self, int result):
+        if result < 0:
+            if result == -cpysoem.EC_ERR_TYPE_FOE_ERROR:
+                raise FoeError(self._pos, result, "General FoE error")
+            elif result == -cpysoem.EC_ERR_TYPE_FOE_BUF2SMALL:
+                raise FoeError(self._pos, result, "Buffer too small for file content")
+            elif result == -cpysoem.EC_ERR_TYPE_FOE_PACKETNUMBER:
+                raise FoeError(self._pos, result, "Packet number error")
+            elif result == -cpysoem.EC_ERR_TYPE_FOE_FILE_NOTFOUND:
+                raise FoeError(self._pos, result, "File not found or access denied")
+            elif result == -cpysoem.EC_ERR_TYPE_PACKET_ERROR:
+                raise FoeError(self._pos, result, "Unexpected packet received")
+            else:
+                raise FoeError(self._pos, result, "Unknown FoE error")
+        if result == 0:
+            raise WkcError(wkc=result)
 
     cdef _raise_exception(self, cpysoem.ec_errort* err):
         if err.Etype == cpysoem.EC_ERR_TYPE_SDO_ERROR:
