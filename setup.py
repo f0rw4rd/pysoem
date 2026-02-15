@@ -114,7 +114,6 @@ setup(name='pysoem',
       },
       classifiers=[
         'Development Status :: 2 - Pre-Alpha',
-        'License :: OSI Approved :: MIT License',
         'Programming Language :: Python',
         'Programming Language :: Cython',
         'Programming Language :: C',
